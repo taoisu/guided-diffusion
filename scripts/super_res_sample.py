@@ -51,6 +51,7 @@ def main():
             (args.batch_size, 3, args.large_size, args.large_size),
             clip_denoised=args.clip_denoised,
             model_kwargs=model_kwargs,
+            progress=True,
         )
         sample = ((sample + 1) * 127.5).clamp(0, 255).to(th.uint8)
         sample = sample.permute(0, 2, 3, 1)

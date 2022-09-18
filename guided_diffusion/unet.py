@@ -7,6 +7,8 @@ import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
 
+from fairscale.nn.checkpoint import checkpoint_wrapper
+
 from .fp16_util import convert_module_to_f16, convert_module_to_f32
 from .nn import (
     checkpoint,
@@ -614,6 +616,22 @@ class UNetModel(nn.Module):
             nn.SiLU(),
             zero_module(conv_nd(dims, input_ch, out_channels, 3, padding=1)),
         )
+        self.apply_actckpt()
+
+    def apply_actckpt(self):
+        def use_fairscale_actckpt(module:nn.Module):
+            return isinstance(module, (ResBlock, AttentionBlock))
+        for block in self.input_blocks:
+            for j, module in enumerate(block):
+                if use_fairscale_actckpt(module):
+                    block[j] = checkpoint_wrapper(module)
+        for j, module in enumerate(self.middle_block):
+            if use_fairscale_actckpt(module):
+                self.middle_block[j] = checkpoint_wrapper(module)
+        for block in self.output_blocks:
+            for j, module in enumerate(block):
+                if use_fairscale_actckpt(module):
+                    block[j] = checkpoint_wrapper(module)
 
     def convert_to_fp16(self):
         """
