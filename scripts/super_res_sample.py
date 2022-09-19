@@ -70,6 +70,9 @@ def main():
         out_path = os.path.join(logger.get_dir(), f"samples_{shape_str}.npz")
         logger.log(f"saving to {out_path}")
         np.savez(out_path, arr)
+        out_path = os.path.join('/tmp', f"samples_{shape_str}.npz")
+        logger.log(f"saving to {out_path}")
+        np.savez(out_path, arr)
 
     dist.barrier()
     logger.log("sampling complete")

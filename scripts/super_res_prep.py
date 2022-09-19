@@ -33,7 +33,8 @@ def main(
         small_size=small_size,
     )
     item = next(data)
-    batch = rearrange((item[0]+1)*127.5, 'b c h w -> b h w c')
+    batch = rearrange((item[1]['low_res']+1)*127.5, 'b c h w -> b h w c')
+    print(batch.shape)
     batch = batch.numpy().astype(np.uint8)
     np.savez(out_path, arr_0=batch)
 
