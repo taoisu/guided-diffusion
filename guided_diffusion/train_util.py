@@ -1,6 +1,7 @@
 import copy
 import functools
 import os
+from random import sample
 
 import blobfile as bf
 import torch as th
@@ -38,6 +39,7 @@ class TrainLoop:
         schedule_sampler=None,
         weight_decay=0.0,
         lr_anneal_steps=0,
+        max_ckpt=3,
     ):
         self.model = model
         self.diffusion = diffusion
@@ -45,6 +47,7 @@ class TrainLoop:
         self.batch_size = batch_size
         self.microbatch = microbatch if microbatch > 0 else batch_size
         self.lr = lr
+        self.max_ckpt = max_ckpt
         self.ema_rate = (
             [ema_rate]
             if isinstance(ema_rate, float)
@@ -141,7 +144,7 @@ class TrainLoop:
     def _load_optimizer_state(self):
         main_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
         opt_checkpoint = bf.join(
-            bf.dirname(main_checkpoint), f"opt{self.resume_step:06}.pt"
+            bf.dirname(main_checkpoint), f"opt{self.resume_step:07}.pt"
         )
         if bf.exists(opt_checkpoint):
             logger.log(f"loading optimizer state from checkpoint: {opt_checkpoint}")
@@ -150,7 +153,18 @@ class TrainLoop:
             )
             self.opt.load_state_dict(state_dict)
 
-    def run_loop(self):
+    def log_img(self, sample_fn, batch, cond, ema_ckpt):
+        ema_model = copy.deepcopy(self.model)
+        ema_model.load_state_dict(dist_util.load_state_dict(ema_ckpt, map_location="cpu"))
+        ema_model.to(dist_util.dev())
+        image = sample_fn(ema_model, self.diffusion, batch, cond)
+        filename = f"sample_{(self.step+self.resume_step):07d}.jpg"
+        img_path = bf.join(get_blob_logdir(), filename)
+        print(f'save sample to {img_path}...')
+        with bf.BlobFile(img_path, 'wb') as f:
+            image.save(f)
+
+    def run_loop(self, sample_fn=None):
         while (
             not self.lr_anneal_steps
             or self.step + self.resume_step < self.lr_anneal_steps
@@ -160,7 +174,10 @@ class TrainLoop:
             if self.step % self.log_interval == 0:
                 logger.dumpkvs()
             if self.step % self.save_interval == 0:
-                self.save()
+                _, ema_ckpts = self.save()
+                self.clean()
+                if sample_fn is not None:
+                    self.log_img(sample_fn, batch, cond, ema_ckpts[0])
                 # Run for a finite amount of time in integration tests.
                 if os.environ.get("DIFFUSION_TRAINING_TEST", "") and self.step > 0:
                     return
@@ -229,30 +246,50 @@ class TrainLoop:
         logger.logkv("step", self.step + self.resume_step)
         logger.logkv("samples", (self.step + self.resume_step + 1) * self.global_batch)
 
+    def clean(self):
+        model_ckpts = sorted(list(bf.glob(bf.join(get_blob_logdir(), 'model*'))))
+        ema_ckpts = sorted(list(bf.glob(bf.join(get_blob_logdir(), 'ema*'))))
+        opt_ckpts = sorted(list(bf.glob(bf.join(get_blob_logdir(), 'opt*'))))
+        assert len(model_ckpts) == len(ema_ckpts) == len(opt_ckpts)
+        num_keep = self.max_ckpt
+        model_ckpts, ema_ckpts, opt_ckpts = model_ckpts[:-num_keep], ema_ckpts[:-num_keep], opt_ckpts[:-num_keep]
+        for model_ckpt, ema_ckpt, opt_ckpt in zip(model_ckpts, ema_ckpts, opt_ckpts):
+            logger.log(f'remove {model_ckpt}')
+            bf.remove(model_ckpt)
+            logger.log(f'remove {ema_ckpt}')
+            bf.remove(ema_ckpt)
+            logger.log(f'remove {opt_ckpt}')
+            bf.remove(opt_ckpt)
+
     def save(self):
+
         def save_checkpoint(rate, params):
             state_dict = self.mp_trainer.master_params_to_state_dict(params)
+            if not rate:
+                filename = f"model{(self.step+self.resume_step):07d}.pt"
+            else:
+                filename = f"ema_{rate}_{(self.step+self.resume_step):07d}.pt"
+            ckpt_path = bf.join(get_blob_logdir(), filename)
             if dist.get_rank() == 0:
-                logger.log(f"saving model {rate}...")
-                if not rate:
-                    filename = f"model{(self.step+self.resume_step):06d}.pt"
-                else:
-                    filename = f"ema_{rate}_{(self.step+self.resume_step):06d}.pt"
-                with bf.BlobFile(bf.join(get_blob_logdir(), filename), "wb") as f:
+                logger.log(f"saving model {rate} to {ckpt_path}...")
+                with bf.BlobFile(ckpt_path, "wb") as f:
                     th.save(state_dict, f)
+            return ckpt_path
 
-        save_checkpoint(0, self.mp_trainer.master_params)
+        master_ckpt = save_checkpoint(0, self.mp_trainer.master_params)
+        ema_ckpts = []
         for rate, params in zip(self.ema_rate, self.ema_params):
-            save_checkpoint(rate, params)
+            ema_ckpts.append(save_checkpoint(rate, params))
 
         if dist.get_rank() == 0:
             with bf.BlobFile(
-                bf.join(get_blob_logdir(), f"opt{(self.step+self.resume_step):06d}.pt"),
+                bf.join(get_blob_logdir(), f"opt{(self.step+self.resume_step):07d}.pt"),
                 "wb",
             ) as f:
                 th.save(self.opt.state_dict(), f)
 
         dist.barrier()
+        return master_ckpt, ema_ckpts
 
 
 def parse_resume_step_from_filename(filename):
@@ -285,7 +322,7 @@ def find_resume_checkpoint():
 def find_ema_checkpoint(main_checkpoint, step, rate):
     if main_checkpoint is None:
         return None
-    filename = f"ema_{rate}_{(step):06d}.pt"
+    filename = f"ema_{rate}_{(step):07d}.pt"
     path = bf.join(bf.dirname(main_checkpoint), filename)
     if bf.exists(path):
         return path

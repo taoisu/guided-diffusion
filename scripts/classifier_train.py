@@ -92,7 +92,7 @@ def main():
     opt = AdamW(mp_trainer.master_params, lr=args.lr, weight_decay=args.weight_decay)
     if args.resume_checkpoint:
         opt_checkpoint = bf.join(
-            bf.dirname(args.resume_checkpoint), f"opt{resume_step:06}.pt"
+            bf.dirname(args.resume_checkpoint), f"opt{resume_step:07}.pt"
         )
         logger.log(f"loading optimizer state from checkpoint: {opt_checkpoint}")
         opt.load_state_dict(
@@ -177,9 +177,9 @@ def save_model(mp_trainer, opt, step):
     if dist.get_rank() == 0:
         th.save(
             mp_trainer.master_params_to_state_dict(mp_trainer.master_params),
-            os.path.join(logger.get_dir(), f"model{step:06d}.pt"),
+            os.path.join(logger.get_dir(), f"model{step:07d}.pt"),
         )
-        th.save(opt.state_dict(), os.path.join(logger.get_dir(), f"opt{step:06d}.pt"))
+        th.save(opt.state_dict(), os.path.join(logger.get_dir(), f"opt{step:07d}.pt"))
 
 
 def compute_top_k(logits, labels, k, reduction="mean"):

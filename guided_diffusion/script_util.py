@@ -300,6 +300,7 @@ def sr_create_model_and_diffusion(
     use_scale_shift_norm,
     resblock_updown,
     use_fp16,
+    use_new_attention_order,
 ):
     model = sr_create_model(
         large_size,
@@ -317,6 +318,7 @@ def sr_create_model_and_diffusion(
         dropout=dropout,
         resblock_updown=resblock_updown,
         use_fp16=use_fp16,
+        use_new_attention_order=use_new_attention_order,
     )
     diffusion = create_gaussian_diffusion(
         steps=diffusion_steps,
@@ -347,6 +349,7 @@ def sr_create_model(
     dropout,
     resblock_updown,
     use_fp16,
+    use_new_attention_order,
 ):
     _ = small_size  # hack to prevent unused variable
 
@@ -380,6 +383,7 @@ def sr_create_model(
         use_scale_shift_norm=use_scale_shift_norm,
         resblock_updown=resblock_updown,
         use_fp16=use_fp16,
+        use_new_attention_order=use_new_attention_order,
     )
 
 
